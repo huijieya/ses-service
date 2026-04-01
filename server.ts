@@ -1,8 +1,24 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import cors from "cors";
-import bodyParser from "body-parser";
 import path from "path";
+import { fileURLToPath } from "url";
+import bodyParser from "body-parser";
+import cors from "cors";
+import admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
+import firebaseConfig from "./firebase-applet-config.json" assert { type: "json" };
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Initialize Firebase Admin
+if (admin.apps.length === 0) {
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
+}
+
+const dbInstance = getFirestore(admin.app(), firebaseConfig.firestoreDatabaseId);
 
 async function startServer() {
   const app = express();
@@ -11,85 +27,75 @@ async function startServer() {
   app.use(cors());
   app.use(bodyParser.json());
 
-  // --- Mock Database ---
-  let flows = [
-    {
-      id: "flow-1",
-      name: "正向分拣主流程",
-      nodes: [
-        { id: "start", type: "start", data: { label: "开始" }, position: { x: 100, y: 100 } },
-        { id: "wave_create", type: "wave_create", data: { label: "创建波次" }, position: { x: 300, y: 100 } },
-        { id: "order_parse", type: "order_parse", data: { label: "解析订单" }, position: { x: 500, y: 100 } },
-        { id: "end", type: "end", data: { label: "结束" }, position: { x: 700, y: 100 } },
-      ],
-      edges: [
-        { id: "e1", source: "start", target: "wave_create" },
-        { id: "e2", source: "wave_create", target: "order_parse" },
-        { id: "e3", source: "order_parse", target: "end" },
-      ],
-    },
-  ];
-
-  let instances: any[] = [];
-
-  // --- API Routes ---
-
-  // Get all flows
-  app.get("/api/flows", (req, res) => {
-    res.json(flows);
+  // API Routes
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", firebase: "connected" });
   });
 
-  // Save/Update flow
-  app.post("/api/flows", (req, res) => {
-    const flow = req.body;
-    const index = flows.findIndex((f) => f.id === flow.id);
-    if (index > -1) {
-      flows[index] = flow;
-    } else {
-      flows.push(flow);
-    }
-    res.json({ success: true });
-  });
-
-  // Execute a flow
+  // Run Flow Execution Engine (Simplified)
   app.post("/api/flows/:id/run", async (req, res) => {
-    const flowId = req.params.id;
-    const flow = flows.find((f) => f.id === flowId);
-    if (!flow) return res.status(404).json({ error: "Flow not found" });
+    const { id } = req.params;
+    const { input } = req.body;
 
-    const instanceId = `inst-${Date.now()}`;
-    const logs: any[] = [];
-    
-    // Simple sequential execution simulation
-    logs.push({ node: "start", status: "success", timestamp: new Date() });
-    
-    for (const node of flow.nodes) {
-      if (node.type === "start" || node.type === "end") continue;
+    try {
+      const flowDoc = await dbInstance.collection('flows').doc(id).get();
+      if (!flowDoc.exists) {
+        return res.status(404).json({ error: "Flow not found" });
+      }
+
+      const flow = flowDoc.data();
+      const instanceId = `inst-${Date.now()}`;
       
-      // Simulate processing time
-      await new Promise(resolve => setTimeout(resolve, 500));
-      logs.push({ 
-        node: node.id, 
-        type: node.type,
-        status: "success", 
-        output: { result: "ok", data: req.body.input || {} },
-        timestamp: new Date() 
+      // Create execution instance
+      const instanceRef = dbInstance.collection('instances').doc(instanceId);
+      await instanceRef.set({
+        id: instanceId,
+        flowId: id,
+        flowName: flow?.name,
+        status: 'RUNNING',
+        progress: 0,
+        startTime: new Date().toISOString(),
+        logs: []
       });
+
+      // Simulation of execution (in a real app, this would be a worker or more complex logic)
+      // We'll return the instance ID and let the frontend monitor it
+      res.json({ instanceId, message: "Execution started" });
+
+      // Background execution simulation
+      (async () => {
+        const nodes = flow?.nodes || [];
+        for (let i = 0; i < nodes.length; i++) {
+          const node = nodes[i];
+          const progress = Math.round(((i + 1) / nodes.length) * 100);
+          
+          await instanceRef.update({
+            progress,
+            currentNode: node.data?.label || node.id,
+            logs: admin.firestore.FieldValue.arrayUnion({
+              timestamp: new Date().toISOString(),
+              node: node.data?.label || node.id,
+              status: 'success',
+              message: `Executed node ${node.id}`
+            })
+          });
+          
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        
+        await instanceRef.update({
+          status: 'COMPLETED',
+          progress: 100
+        });
+      })();
+
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Execution failed" });
     }
-
-    logs.push({ node: "end", status: "success", timestamp: new Date() });
-
-    const instance = { id: instanceId, flowId, logs, status: "completed" };
-    instances.push(instance);
-    res.json(instance);
   });
 
-  // Get execution history
-  app.get("/api/instances", (req, res) => {
-    res.json(instances);
-  });
-
-  // --- Vite Middleware ---
+  // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -97,15 +103,15 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`SES Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 

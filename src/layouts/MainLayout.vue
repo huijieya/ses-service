@@ -1,14 +1,43 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { auth } from '../firebase'
+import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth'
 import { 
   Zap, Workflow, Cpu, Database, FileText, 
   Settings, Layout, Bell, User, ChevronRight,
-  Monitor, BarChart3, Package
+  Monitor, BarChart3, Package, LogOut
 } from 'lucide-vue-next'
 
 const route = useRoute()
 const currentPath = computed(() => route.path)
+
+const user = ref<any>(null)
+const isAuthReady = ref(false)
+
+const login = async () => {
+  const provider = new GoogleAuthProvider()
+  try {
+    await signInWithPopup(auth, provider)
+  } catch (e) {
+    console.error('Login failed', e)
+  }
+}
+
+const logout = async () => {
+  try {
+    await signOut(auth)
+  } catch (e) {
+    console.error('Logout failed', e)
+  }
+}
+
+onMounted(() => {
+  onAuthStateChanged(auth, (u) => {
+    user.value = u
+    isAuthReady.value = true
+  })
+})
 
 const menuItems = [
   { name: '系统概览', path: '/', icon: BarChart3 },
@@ -79,20 +108,34 @@ const flows = ref([
         </div>
         
         <div class="flex items-center gap-4">
-          <button class="p-2 text-slate-400 hover:text-slate-600 relative">
-            <Bell :size="18" />
-            <span class="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+          <button v-if="!user" @click="login" class="px-4 py-1.5 bg-[#2ec6d6] text-white rounded-lg text-sm font-bold shadow-sm hover:bg-[#25b1c0] transition-all">
+            登录
           </button>
-          <div class="h-6 w-px bg-slate-200"></div>
-          <div class="flex items-center gap-3 cursor-pointer hover:bg-slate-50 p-1 rounded-lg transition-colors">
-            <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
-              <User :size="18" />
+          <template v-else>
+            <button class="p-2 text-slate-400 hover:text-slate-600 relative">
+              <Bell :size="18" />
+              <span class="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+            </button>
+            <div class="h-6 w-px bg-slate-200"></div>
+            <div class="flex items-center gap-3 cursor-pointer hover:bg-slate-50 p-1 rounded-lg transition-colors group relative">
+              <img v-if="user.photoURL" :src="user.photoURL" class="w-8 h-8 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
+              <div v-else class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
+                <User :size="18" />
+              </div>
+              <div class="hidden sm:block">
+                <div class="text-xs font-bold text-slate-700">{{ user.displayName || '用户' }}</div>
+                <div class="text-[10px] text-slate-400 truncate max-w-[100px]">{{ user.email }}</div>
+              </div>
+              
+              <!-- Dropdown -->
+              <div class="absolute right-0 top-full mt-1 hidden group-hover:block bg-white border border-slate-200 rounded-lg shadow-lg z-50 min-w-[120px]">
+                <button @click="logout" class="w-full text-left px-4 py-2 text-xs text-red-500 hover:bg-red-50 transition-colors flex items-center gap-2">
+                  <LogOut :size="14" />
+                  退出登录
+                </button>
+              </div>
             </div>
-            <div class="hidden sm:block">
-              <div class="text-xs font-bold text-slate-700">管理员</div>
-              <div class="text-[10px] text-slate-400">guohuijie007</div>
-            </div>
-          </div>
+          </template>
         </div>
       </header>
 

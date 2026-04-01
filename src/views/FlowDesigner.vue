@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, markRaw } from 'vue'
+import { ref, onMounted, markRaw, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { db } from '../firebase'
+import { doc, getDoc, setDoc, updateDoc, collection, onSnapshot } from 'firebase/firestore'
 import { 
   VueFlow, 
   useVueFlow, 
@@ -12,7 +14,7 @@ import { MiniMap } from '@vue-flow/minimap'
 import { 
   Save, Play, Plus, Search, Settings, 
   Layout, Clock, Terminal, CheckCircle2, AlertCircle,
-  ChevronRight, Zap
+  ChevronRight, Zap, Trash2
 } from 'lucide-vue-next'
 
 // Import custom nodes
@@ -22,6 +24,8 @@ import WaveNode from '../components/WaveNode.vue'
 import ChuteNode from '../components/ChuteNode.vue'
 import LogicNode from '../components/LogicNode.vue'
 import BaseNode from '../components/BaseNode.vue'
+import ConditionNode from '../components/ConditionNode.vue'
+import ForeachNode from '../components/ForeachNode.vue'
 
 const nodeTypes = {
   start: markRaw(StartNode),
@@ -30,56 +34,119 @@ const nodeTypes = {
   chute: markRaw(ChuteNode),
   logic: markRaw(LogicNode),
   base: markRaw(BaseNode),
+  condition: markRaw(ConditionNode),
+  foreach: markRaw(ForeachNode),
 } as any
 
 const route = useRoute()
 const router = useRouter()
-const { onConnect, addEdges, toObject } = useVueFlow()
+const flowId = ref(route.params.id as string)
+const { onConnect, addEdges, toObject, fromObject, addNodes, removeNodes, removeEdges } = useVueFlow()
 
-const nodes = ref([
-  { id: '1', type: 'start', position: { x: 100, y: 100 }, data: { label: '开始' } },
-  { id: '2', type: 'wave', position: { x: 300, y: 100 }, data: { label: '创建波次' } },
-  { id: '3', type: 'logic', position: { x: 500, y: 100 }, data: { label: '解析订单' } },
-  { id: '4', type: 'chute', position: { x: 700, y: 100 }, data: { label: '分配格口' } },
-  { id: '5', type: 'end', position: { x: 900, y: 100 }, data: { label: '结束' } },
-])
-
-const edges = ref([
-  { id: 'e1-2', source: '1', target: '2' },
-  { id: 'e2-3', source: '2', target: '3' },
-  { id: 'e3-4', source: '3', target: '4' },
-  { id: 'e4-5', source: '4', target: '5' },
-])
-
-const selectedNode = ref<any>(null)
+const nodes = ref<any[]>([])
+const edges = ref<any[]>([])
+const flowName = ref('未命名工作流')
+const isSaving = ref(false)
 const isRunning = ref(false)
+const selectedNode = ref<any>(null)
 const logs = ref<any[]>([])
+
+const fetchFlow = async () => {
+  if (!flowId.value) {
+    // Default initial nodes for new flow
+    nodes.value = [
+      { id: '1', type: 'start', position: { x: 100, y: 100 }, data: { label: '开始' } },
+    ]
+    return
+  }
+  
+  try {
+    const docSnap = await getDoc(doc(db, 'flows', flowId.value))
+    if (docSnap.exists()) {
+      const flow = docSnap.data()
+      flowName.value = flow.name || '未命名工作流'
+      fromObject(flow)
+    }
+  } catch (e) {
+    console.error('Failed to fetch flow', e)
+  }
+}
+
+const onSave = async () => {
+  isSaving.value = true
+  const flowData = toObject()
+  const payload = {
+    ...flowData,
+    name: flowName.value,
+    updatedAt: new Date().toISOString()
+  }
+  
+  try {
+    if (flowId.value) {
+      await updateDoc(doc(db, 'flows', flowId.value), payload)
+    } else {
+      const newDocRef = doc(collection(db, 'flows'))
+      flowId.value = newDocRef.id
+      await setDoc(newDocRef, { ...payload, id: flowId.value })
+      router.replace(`/designer/${flowId.value}`)
+    }
+    alert('工作流已保存')
+  } catch (e) {
+    console.error('Failed to save flow', e)
+    alert('保存失败')
+  } finally {
+    isSaving.value = false
+  }
+}
+
+const onRun = async () => {
+  if (isRunning.value || !flowId.value) return
+  isRunning.value = true
+  logs.value = []
+  
+  try {
+    const res = await fetch(`/api/flows/${flowId.value}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: {} })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      alert(`工作流已启动，实例 ID: ${data.instanceId}`)
+      // Monitor the instance
+      const unsub = onSnapshot(doc(db, 'instances', data.instanceId), (snap) => {
+        if (snap.exists()) {
+          const inst = snap.data()
+          logs.value = inst.logs || []
+          if (inst.status === 'COMPLETED' || inst.status === 'FAILED') {
+            isRunning.value = false
+            unsub()
+          }
+        }
+      })
+    }
+  } catch (e) {
+    console.error('Failed to run flow', e)
+    isRunning.value = false
+  }
+}
 
 const onNodeClick = (event: any) => {
   selectedNode.value = event.node
 }
 
-const onRun = async () => {
-  isRunning.value = true
-  logs.value = []
-  
-  const steps = ['start', 'wave_create', 'order_parse', 'chute_assign', 'end']
-  for (const step of steps) {
-    await new Promise(r => setTimeout(r, 800))
-    logs.value.unshift({
-      timestamp: new Date().toISOString(),
-      node: step,
-      status: 'success',
-      output: { id: Math.random().toString(36).substr(2, 9) }
-    })
+const addNode = (type: string) => {
+  const id = `${type}-${Date.now()}`
+  const newNode = {
+    id,
+    type,
+    position: { x: Math.random() * 400, y: Math.random() * 400 },
+    data: { label: `新${type}节点`, config: {} }
   }
-  isRunning.value = false
+  addNodes([newNode])
 }
 
-const onSave = () => {
-  console.log('Saving flow:', toObject())
-  alert('工作流已保存')
-}
+onMounted(fetchFlow)
 
 onConnect((params) => addEdges([params]))
 </script>
@@ -93,16 +160,20 @@ onConnect((params) => addEdges([params]))
           <ChevronRight :size="18" class="rotate-180" />
         </button>
         <span class="text-slate-400 text-sm">工作流 /</span>
-        <span class="font-medium text-sm">正向分拣主流程</span>
+        <input 
+          v-model="flowName"
+          class="font-medium text-sm bg-transparent border-b border-transparent hover:border-slate-200 focus:border-[#2ec6d6] focus:outline-none px-1"
+        />
       </div>
       
       <div class="flex items-center gap-3">
         <button 
           @click="onSave"
-          class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all text-sm font-medium"
+          :disabled="isSaving"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all text-sm font-medium disabled:opacity-50"
         >
           <Save :size="14" />
-          保存
+          {{ isSaving ? '保存中...' : '保存' }}
         </button>
         <button 
           @click="onRun"
@@ -137,11 +208,21 @@ onConnect((params) => addEdges([params]))
           </Panel>
 
           <Panel position="bottom-center" class="mb-4">
-            <div class="bg-white rounded-full border border-slate-200 shadow-lg px-6 py-3 flex items-center gap-6">
-              <button class="flex items-center gap-2 text-slate-600 hover:text-[#2ec6d6] transition-colors text-sm font-medium">
-                <Plus :size="18" class="text-[#2ec6d6]" />
-                添加节点
-              </button>
+            <div class="bg-white rounded-full border border-slate-200 shadow-lg px-6 py-3 flex items-center gap-4">
+              <div class="flex items-center gap-2">
+                <button 
+                  v-for="type in ['wave', 'logic', 'chute', 'condition', 'foreach']" 
+                  :key="type"
+                  @click="addNode(type)"
+                  class="p-2 rounded-lg hover:bg-slate-50 text-slate-600 transition-all flex flex-col items-center gap-1 group"
+                  :title="`添加${type}节点`"
+                >
+                  <div class="w-8 h-8 rounded bg-slate-50 flex items-center justify-center group-hover:bg-[#2ec6d6]/10 group-hover:text-[#2ec6d6]">
+                    <Plus :size="16" />
+                  </div>
+                  <span class="text-[8px] font-bold uppercase tracking-tighter">{{ type }}</span>
+                </button>
+              </div>
               <div class="w-px h-4 bg-slate-200" />
               <button class="text-slate-400 hover:text-slate-600 transition-colors">
                 <Search :size="18" />
@@ -183,9 +264,16 @@ onConnect((params) => addEdges([params]))
             ></textarea>
           </div>
 
-          <div class="pt-4 border-t">
+          <div class="pt-4 border-t space-y-2">
             <button class="w-full py-2 bg-slate-900 text-white rounded-md text-sm font-bold hover:bg-slate-800 transition-colors">
               更新配置
+            </button>
+            <button 
+              @click="removeNodes([selectedNode.id]); selectedNode = null"
+              class="w-full py-2 bg-red-50 text-red-500 rounded-md text-sm font-bold hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+            >
+              <Trash2 :size="14" />
+              删除节点
             </button>
           </div>
         </div>

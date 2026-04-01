@@ -1,16 +1,34 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { db } from '../firebase'
+import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore'
 import { 
   Activity, Clock, CheckCircle2, AlertCircle, 
-  Search, Filter, Play, Pause, RotateCcw, MoreVertical
+  Search, Filter, Play, Pause, RotateCcw, MoreVertical, Terminal
 } from 'lucide-vue-next'
 
-const instances = ref([
-  { id: 'INST-001', flow: '正向分拣主流程', status: 'RUNNING', progress: 65, start: '10:24:15', duration: '2m 15s', node: 'chute_assign' },
-  { id: 'INST-002', flow: '格口异常处理', status: 'COMPLETED', progress: 100, start: '10:20:00', duration: '45s', node: 'End' },
-  { id: 'INST-003', flow: 'PDA 扫描播种', status: 'FAILED', progress: 40, start: '10:15:30', duration: '1m 10s', node: 'pda_distribute' },
-  { id: 'INST-004', flow: '正向分拣主流程', status: 'SUSPENDED', progress: 20, start: '10:10:00', duration: '15m 0s', node: 'order_parse' },
-])
+const instances = ref<any[]>([])
+const isLoading = ref(true)
+let unsubscribe: any = null
+
+const fetchInstances = () => {
+  const q = query(collection(db, 'instances'), orderBy('startTime', 'desc'), limit(50))
+  unsubscribe = onSnapshot(q, (snapshot) => {
+    instances.value = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }))
+    isLoading.value = false
+  }, (error) => {
+    console.error('Failed to fetch instances', error)
+    isLoading.value = false
+  })
+}
+
+onMounted(fetchInstances)
+onUnmounted(() => {
+  if (unsubscribe) unsubscribe()
+})
 </script>
 
 <template>
@@ -46,7 +64,16 @@ const instances = ref([
         </div>
       </div>
 
-      <div class="overflow-x-auto">
+      <div v-if="isLoading" class="p-12 flex justify-center">
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[#2ec6d6]"></div>
+      </div>
+
+      <div v-else-if="instances.length === 0" class="p-12 text-center text-slate-400">
+        <Activity :size="48" class="mx-auto mb-4 opacity-20" />
+        <p>暂无运行记录</p>
+      </div>
+
+      <div v-else class="overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead class="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest">
             <tr>
@@ -55,14 +82,16 @@ const instances = ref([
               <th class="px-6 py-4">当前进度</th>
               <th class="px-6 py-4">当前节点</th>
               <th class="px-6 py-4">开始时间</th>
-              <th class="px-6 py-4">耗时</th>
               <th class="px-6 py-4 text-right">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr v-for="inst in instances" :key="inst.id" class="hover:bg-slate-50/50 transition-colors group">
               <td class="px-6 py-4 font-mono text-xs text-slate-500">{{ inst.id }}</td>
-              <td class="px-6 py-4 font-medium text-slate-700">{{ inst.flow }}</td>
+              <td class="px-6 py-4">
+                <div class="font-bold text-slate-700">{{ inst.flowName || '未知工作流' }}</div>
+                <div class="text-[10px] text-slate-400 font-mono">{{ inst.flowId }}</div>
+              </td>
               <td class="px-6 py-4">
                 <div class="w-32 space-y-1">
                   <div class="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase">
@@ -84,20 +113,15 @@ const instances = ref([
                 </div>
               </td>
               <td class="px-6 py-4">
-                <span class="px-2 py-1 bg-slate-100 rounded text-[10px] font-mono text-slate-500">{{ inst.node }}</span>
+                <span class="px-2 py-1 bg-slate-100 rounded text-[10px] font-mono text-slate-500">{{ inst.currentNode || '-' }}</span>
               </td>
-              <td class="px-6 py-4 text-slate-400 text-xs">{{ inst.start }}</td>
-              <td class="px-6 py-4 text-slate-400 text-xs">{{ inst.duration }}</td>
+              <td class="px-6 py-4 text-slate-400 text-xs">
+                {{ inst.startTime ? new Date(inst.startTime).toLocaleString() : '-' }}
+              </td>
               <td class="px-6 py-4 text-right">
                 <div class="flex items-center justify-end gap-2">
-                  <button v-if="inst.status === 'RUNNING'" class="p-2 text-slate-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-all" title="暂停">
-                    <Pause :size="16" />
-                  </button>
-                  <button v-if="inst.status === 'SUSPENDED'" class="p-2 text-slate-400 hover:text-green-500 hover:bg-green-50 rounded-lg transition-all" title="恢复">
-                    <Play :size="16" />
-                  </button>
-                  <button v-if="inst.status === 'FAILED'" class="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all" title="重试">
-                    <RotateCcw :size="16" />
+                  <button class="p-2 text-slate-400 hover:text-[#2ec6d6] hover:bg-[#2ec6d6]/5 rounded-lg transition-all" title="查看日志">
+                    <Terminal :size="16" />
                   </button>
                   <button class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
                     <MoreVertical :size="16" />

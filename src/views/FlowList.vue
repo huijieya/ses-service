@@ -1,12 +1,40 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { Plus, Search, MoreVertical, Play, Edit2, Trash2, Copy } from 'lucide-vue-next'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { db } from '../firebase'
+import { collection, onSnapshot, query, orderBy, deleteDoc, doc } from 'firebase/firestore'
+import { Plus, Search, Edit2, Trash2, Workflow } from 'lucide-vue-next'
 
-const flows = ref([
-  { id: 'f1', name: '正向分拣主流程', version: 'v3.0', status: 'ACTIVE', type: 'STANDARD', updated: '2026-04-01 10:00' },
-  { id: 'f2', name: '格口异常处理', version: 'v1.2', status: 'ACTIVE', type: 'CUSTOM', updated: '2026-03-28 15:30' },
-  { id: 'f3', name: 'PDA 扫描播种', version: 'v2.1', status: 'DRAFT', type: 'STANDARD', updated: '2026-03-30 09:15' },
-])
+const flows = ref<any[]>([])
+const isLoading = ref(true)
+let unsubscribe: any = null
+
+const fetchFlows = () => {
+  const q = query(collection(db, 'flows'), orderBy('updatedAt', 'desc'))
+  unsubscribe = onSnapshot(q, (snapshot) => {
+    flows.value = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }))
+    isLoading.value = false
+  }, (error) => {
+    console.error('Failed to fetch flows', error)
+    isLoading.value = false
+  })
+}
+
+const deleteFlow = async (id: string) => {
+  if (!confirm('确定要删除该工作流吗？')) return
+  try {
+    await deleteDoc(doc(db, 'flows', id))
+  } catch (e) {
+    console.error('Failed to delete flow', e)
+  }
+}
+
+onMounted(fetchFlows)
+onUnmounted(() => {
+  if (unsubscribe) unsubscribe()
+})
 </script>
 
 <template>
@@ -35,23 +63,25 @@ const flows = ref([
             class="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#2ec6d6]/20 focus:border-[#2ec6d6]"
           />
         </div>
-        <select class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600 focus:outline-none">
-          <option>所有状态</option>
-          <option>活跃</option>
-          <option>草稿</option>
-          <option>已禁用</option>
-        </select>
       </div>
 
-      <div class="overflow-x-auto">
+      <div v-if="isLoading" class="p-12 flex justify-center">
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[#2ec6d6]"></div>
+      </div>
+
+      <div v-else-if="flows.length === 0" class="p-12 text-center text-slate-400">
+        <Workflow :size="48" class="mx-auto mb-4 opacity-20" />
+        <p>暂无工作流定义，点击右上角新建</p>
+      </div>
+
+      <div v-else class="overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead class="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest">
             <tr>
               <th class="px-6 py-4">名称</th>
-              <th class="px-6 py-4">类型</th>
               <th class="px-6 py-4">版本</th>
               <th class="px-6 py-4">状态</th>
-              <th class="px-6 py-4">最后更新</th>
+              <th class="px-6 py-4 text-nowrap">最后更新</th>
               <th class="px-6 py-4 text-right">操作</th>
             </tr>
           </thead>
@@ -68,27 +98,19 @@ const flows = ref([
                   </div>
                 </div>
               </td>
+              <td class="px-6 py-4 text-slate-500 font-mono">{{ f.version || 'v1.0' }}</td>
               <td class="px-6 py-4">
-                <span class="px-2 py-1 rounded text-[10px] font-bold" :class="f.type === 'STANDARD' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'">
-                  {{ f.type }}
+                <span class="px-2 py-1 rounded-full text-[10px] font-bold bg-green-50 text-green-600">
+                  ACTIVE
                 </span>
               </td>
-              <td class="px-6 py-4 text-slate-500 font-mono">{{ f.version }}</td>
-              <td class="px-6 py-4">
-                <span class="px-2 py-1 rounded-full text-[10px] font-bold" :class="f.status === 'ACTIVE' ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-500'">
-                  {{ f.status }}
-                </span>
-              </td>
-              <td class="px-6 py-4 text-slate-400 text-xs">{{ f.updated }}</td>
+              <td class="px-6 py-4 text-slate-400 text-xs text-nowrap">{{ f.updatedAt ? new Date(f.updatedAt).toLocaleString() : '-' }}</td>
               <td class="px-6 py-4 text-right">
                 <div class="flex items-center justify-end gap-2">
                   <router-link :to="`/designer/${f.id}`" class="p-2 text-slate-400 hover:text-[#2ec6d6] hover:bg-[#2ec6d6]/5 rounded-lg transition-all" title="编辑">
                     <Edit2 :size="16" />
                   </router-link>
-                  <button class="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all" title="复制">
-                    <Copy :size="16" />
-                  </button>
-                  <button class="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all" title="删除">
+                  <button @click="deleteFlow(f.id)" class="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all" title="删除">
                     <Trash2 :size="16" />
                   </button>
                 </div>

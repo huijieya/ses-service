@@ -1,0 +1,60 @@
+{
+  "entities": {
+    "FlowDefinition": {
+      "title": "Flow Definition",
+      "description": "Stores the DAG structure of a workflow",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "nodes": { "type": "array", "items": { "type": "object" } },
+        "edges": { "type": "array", "items": { "type": "object" } },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "nodes", "edges"]
+    },
+    "Device": {
+      "title": "Device",
+      "description": "Physical hardware device information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "status": { "type": "string" },
+        "ip": { "type": "string" },
+        "chutes": { "type": "number" },
+        "lastHeartbeat": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "type"]
+    },
+    "FlowInstance": {
+      "title": "Flow Instance",
+      "description": "Execution record of a workflow",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "flowId": { "type": "string" },
+        "status": { "type": "string" },
+        "progress": { "type": "number" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "logs": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["id", "flowId", "status"]
+    }
+  },
+  "firestore": {
+    "/flows/{flowId}": {
+      "schema": "FlowDefinition",
+      "description": "Workflow definitions"
+    },
+    "/devices/{deviceId}": {
+      "schema": "Device",
+      "description": "Hardware devices"
+    },
+    "/instances/{instanceId}": {
+      "schema": "FlowInstance",
+      "description": "Workflow execution instances"
+    }
+  }
+}
